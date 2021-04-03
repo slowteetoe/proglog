@@ -18,3 +18,20 @@ Install the golang grpc plugin:
 go get google.golang.org/grpc@v1.32.0
 go get google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.0.0
 ```
+
+## Testing
+
+(TODO sort out the Makefile a bit so we don't have to separate into "first time" "every other time")
+
+First time:
+
+```bash
+make init
+make gencerts
+```
+
+Every time:
+
+```bash
+make test
+```
