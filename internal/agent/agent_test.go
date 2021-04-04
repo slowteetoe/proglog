@@ -35,13 +35,16 @@ func TestAgent(t *testing.T) {
 		ServerAddress: "127.0.0.1",
 	})
 	require.NoError(t, err)
+
 	var agents []*agent.Agent
 	for i := 0; i < 3; i++ {
 		ports := dynaport.Get(2)
 		bindAddr := fmt.Sprintf("%s:%d", "127.0.0.1", ports[0])
 		rpcPort := ports[1]
+
 		dataDir, err := ioutil.TempDir("", "agent-test-log")
 		require.NoError(t, err)
+
 		var startJoinAddrs []string
 		if i != 0 {
 			startJoinAddrs = append(
@@ -49,6 +52,7 @@ func TestAgent(t *testing.T) {
 				agents[0].Config.BindAddr,
 			)
 		}
+
 		agent, err := agent.New(agent.Config{
 			NodeName:        fmt.Sprintf("%d", i),
 			StartJoinAddrs:  startJoinAddrs,
@@ -59,8 +63,10 @@ func TestAgent(t *testing.T) {
 			ACLPolicyFile:   config.ACLPolicyFile,
 			ServerTLSConfig: serverTLSConfig,
 			PeerTLSConfig:   peerTLSConfig,
+			Bootstrap:       i == 0,
 		})
 		require.NoError(t, err)
+
 		agents = append(agents, agent)
 	}
 	defer func() {
@@ -72,8 +78,11 @@ func TestAgent(t *testing.T) {
 			)
 		}
 	}()
+
 	time.Sleep(3 * time.Second)
+
 	leaderClient := client(t, agents[0], peerTLSConfig)
+
 	produceResponse, err := leaderClient.Produce(
 		context.Background(),
 		&api.ProduceRequest{
@@ -83,6 +92,7 @@ func TestAgent(t *testing.T) {
 		},
 	)
 	require.NoError(t, err)
+
 	consumeResponse, err := leaderClient.Consume(
 		context.Background(),
 		&api.ConsumeRequest{
@@ -91,9 +101,12 @@ func TestAgent(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, consumeResponse.Record.Value, []byte("foo"))
+
 	// wait until replication has finished
 	time.Sleep(3 * time.Second)
+
 	followerClient := client(t, agents[1], peerTLSConfig)
+
 	consumeResponse, err = followerClient.Consume(
 		context.Background(),
 		&api.ConsumeRequest{
@@ -102,6 +115,18 @@ func TestAgent(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, consumeResponse.Record.Value, []byte("foo"))
+
+	consumeResponse, err = leaderClient.Consume(
+		context.Background(),
+		&api.ConsumeRequest{
+			Offset: produceResponse.Offset + 1,
+		},
+	)
+	require.Nil(t, consumeResponse)
+	require.Error(t, err)
+	got := grpc.Code(err)
+	want := grpc.Code(api.ErrOffsetOutOfRange{}.GRPCStatus().Err())
+	require.Equal(t, got, want)
 }
 
 func client(
@@ -117,10 +142,7 @@ func client(
 	rpcAddr, err := agent.Config.RPCAddr()
 	require.NoError(t, err)
 
-	conn, err := grpc.Dial(fmt.Sprintf(
-		"%s",
-		rpcAddr,
-	), opts...)
+	conn, err := grpc.Dial(rpcAddr, opts...)
 	require.NoError(t, err)
 
 	return api.NewLogClient(conn)
