@@ -3,9 +3,10 @@ package discovery
 import (
 	"net"
 
+	"go.uber.org/zap"
+
 	"github.com/hashicorp/raft"
 	"github.com/hashicorp/serf/serf"
-	"go.uber.org/zap"
 )
 
 type Membership struct {
@@ -88,10 +89,6 @@ func (m *Membership) eventHandler() {
 	}
 }
 
-func (m *Membership) isLocal(member serf.Member) bool {
-	return m.serf.LocalMember().Name == member.Name
-}
-
 func (m *Membership) handleJoin(member serf.Member) {
 	if err := m.handler.Join(
 		member.Name,
@@ -109,12 +106,18 @@ func (m *Membership) handleLeave(member serf.Member) {
 	}
 }
 
+func (m *Membership) isLocal(member serf.Member) bool {
+	return m.serf.LocalMember().Name == member.Name
+}
+
 func (m *Membership) Members() []serf.Member {
 	return m.serf.Members()
 }
+
 func (m *Membership) Leave() error {
 	return m.serf.Leave()
 }
+
 func (m *Membership) logError(err error, msg string, member serf.Member) {
 	log := m.logger.Error
 	if err == raft.ErrNotLeader {

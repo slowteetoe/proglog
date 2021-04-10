@@ -17,19 +17,16 @@ import (
 )
 
 func TestMultipleNodes(t *testing.T) {
-
 	var logs []*log.DistributedLog
-
 	nodeCount := 3
 	ports := dynaport.Get(nodeCount)
-	for i := 0; i < nodeCount; i++ {
 
+	for i := 0; i < nodeCount; i++ {
 		dataDir, err := ioutil.TempDir("", "distributed-log-test")
 		require.NoError(t, err)
 		defer func(dir string) {
 			_ = os.RemoveAll(dir)
 		}(dataDir)
-
 		ln, err := net.Listen(
 			"tcp",
 			fmt.Sprintf("127.0.0.1:%d", ports[i]),
@@ -43,6 +40,7 @@ func TestMultipleNodes(t *testing.T) {
 		config.Raft.ElectionTimeout = 50 * time.Millisecond
 		config.Raft.LeaderLeaseTimeout = 50 * time.Millisecond
 		config.Raft.CommitTimeout = 5 * time.Millisecond
+
 		if i == 0 {
 			config.Raft.Bootstrap = true
 		}
@@ -67,7 +65,6 @@ func TestMultipleNodes(t *testing.T) {
 		{Value: []byte("first")},
 		{Value: []byte("second")},
 	}
-
 	for _, record := range records {
 		off, err := logs[0].Append(record)
 		require.NoError(t, err)
@@ -99,12 +96,10 @@ func TestMultipleNodes(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	// since server 1 left the cluster, the leader should have stopped replicating to it
 	record, err := logs[1].Read(off)
 	require.IsType(t, api.ErrOffsetOutOfRange{}, err)
 	require.Nil(t, record)
 
-	// server 2 should still have received the latest message
 	record, err = logs[2].Read(off)
 	require.NoError(t, err)
 	require.Equal(t, []byte("third"), record.Value)

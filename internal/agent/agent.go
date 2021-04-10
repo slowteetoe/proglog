@@ -10,15 +10,42 @@ import (
 	"time"
 
 	"github.com/hashicorp/raft"
-	"github.com/slowteetoe/proglog/internal/auth"
-	"github.com/slowteetoe/proglog/internal/discovery"
-	"github.com/slowteetoe/proglog/internal/log"
-	"github.com/slowteetoe/proglog/internal/server"
 	"github.com/soheilhy/cmux"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+
+	"github.com/slowteetoe/proglog/internal/auth"
+	"github.com/slowteetoe/proglog/internal/discovery"
+	"github.com/slowteetoe/proglog/internal/log"
+	"github.com/slowteetoe/proglog/internal/server"
 )
+
+type Config struct {
+	ServerTLSConfig *tls.Config
+	PeerTLSConfig   *tls.Config
+	// DataDir stores the log and raft data.
+	DataDir string
+	// BindAddr is the address serf runs on.
+	BindAddr string
+	// RPCPort is the port for client (and Raft) connections.
+	RPCPort int
+	// Raft server id.
+	NodeName string
+	// Bootstrap should be set to true when starting the first node of the cluster.
+	StartJoinAddrs []string
+	ACLModelFile   string
+	ACLPolicyFile  string
+	Bootstrap      bool
+}
+
+func (c Config) RPCAddr() (string, error) {
+	host, _, err := net.SplitHostPort(c.BindAddr)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s:%d", host, c.RPCPort), nil
+}
 
 type Agent struct {
 	Config Config
@@ -33,32 +60,16 @@ type Agent struct {
 	shutdownLock sync.Mutex
 }
 
-type Config struct {
-	Bootstrap       bool
-	ServerTLSConfig *tls.Config
-	PeerTLSConfig   *tls.Config
-	DataDir         string
-	BindAddr        string
-	RPCPort         int
-	NodeName        string
-	StartJoinAddrs  []string
-	ACLModelFile    string
-	ACLPolicyFile   string
-}
-
-func (c Config) RPCAddr() (string, error) {
-	host, _, err := net.SplitHostPort(c.BindAddr)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%s:%d", host, c.RPCPort), nil
-}
-
 func New(config Config) (*Agent, error) {
 	a := &Agent{
 		Config:    config,
 		shutdowns: make(chan struct{}),
 	}
+	logger, err := zap.NewProduction()
+	if err != nil {
+		return nil, err
+	}
+	zap.ReplaceGlobals(logger)
 	setup := []func() error{
 		a.setupLogger,
 		a.setupMux,
@@ -71,17 +82,8 @@ func New(config Config) (*Agent, error) {
 			return nil, err
 		}
 	}
+	go a.serve()
 	return a, nil
-}
-
-func (a *Agent) setupMux() error {
-	rpcAddr := fmt.Sprintf(":%d", a.Config.RPCPort)
-	listener, err := net.Listen("tcp", rpcAddr)
-	if err != nil {
-		return err
-	}
-	a.mux = cmux.New(listener)
-	return nil
 }
 
 func (a *Agent) setupLogger() error {
@@ -93,13 +95,26 @@ func (a *Agent) setupLogger() error {
 	return nil
 }
 
+func (a *Agent) setupMux() error {
+	rpcAddr := fmt.Sprintf(
+		":%d",
+		a.Config.RPCPort,
+	)
+	ln, err := net.Listen("tcp", rpcAddr)
+	if err != nil {
+		return err
+	}
+	a.mux = cmux.New(ln)
+	return nil
+}
+
 func (a *Agent) setupLog() error {
 	raftLn := a.mux.Match(func(reader io.Reader) bool {
 		b := make([]byte, 1)
 		if _, err := reader.Read(b); err != nil {
 			return false
 		}
-		return bytes.Equal(b, []byte{byte(log.RaftRPC)})
+		return bytes.Compare(b, []byte{byte(log.RaftRPC)}) == 0
 	})
 	logConfig := log.Config{}
 	logConfig.Raft.StreamLayer = log.NewStreamLayer(
@@ -142,10 +157,9 @@ func (a *Agent) setupServer() error {
 	if err != nil {
 		return err
 	}
-
-	grpcListener := a.mux.Match(cmux.Any())
+	grpcLn := a.mux.Match(cmux.Any())
 	go func() {
-		if err := a.server.Serve(grpcListener); err != nil {
+		if err := a.server.Serve(grpcLn); err != nil {
 			_ = a.Shutdown()
 		}
 	}()
@@ -153,12 +167,10 @@ func (a *Agent) setupServer() error {
 }
 
 func (a *Agent) setupMembership() error {
-
 	rpcAddr, err := a.Config.RPCAddr()
 	if err != nil {
 		return err
 	}
-
 	a.membership, err = discovery.New(a.log, discovery.Config{
 		NodeName: a.Config.NodeName,
 		BindAddr: a.Config.BindAddr,
@@ -167,20 +179,24 @@ func (a *Agent) setupMembership() error {
 		},
 		StartJoinAddrs: a.Config.StartJoinAddrs,
 	})
-
 	return err
+}
+
+func (a *Agent) serve() error {
+	if err := a.mux.Serve(); err != nil {
+		_ = a.Shutdown()
+		return err
+	}
+	return nil
 }
 
 func (a *Agent) Shutdown() error {
 	a.shutdownLock.Lock()
 	defer a.shutdownLock.Unlock()
-
 	if a.shutdown {
 		return nil
 	}
-
 	a.shutdown = true
-
 	close(a.shutdowns)
 
 	shutdown := []func() error{
@@ -191,12 +207,10 @@ func (a *Agent) Shutdown() error {
 		},
 		a.log.Close,
 	}
-
 	for _, fn := range shutdown {
 		if err := fn(); err != nil {
 			return err
 		}
 	}
-
 	return nil
 }
