@@ -14,7 +14,7 @@ require (
 	github.com/tysontate/gommap v0.0.0-20190103205956-899e1273fb5c
 	go.opencensus.io v0.22.4
 	go.uber.org/zap v1.10.0
-	golang.org/x/net v0.0.0-20190724013045-ca1201d0de80 // indirect
+	golang.org/x/net v0.7.0 // indirect
 	google.golang.org/genproto v0.0.0-20200806141610-86f49bd18e98
 	google.golang.org/grpc v1.32.0
 	google.golang.org/grpc/examples v0.0.0-20210409234925-fab5982df20a // indirect
